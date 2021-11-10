@@ -403,7 +403,7 @@ func (g *Generator) output(fileName string, content []byte) error {
 	result, err := imports.Process(fileName, content, nil)
 	if err != nil {
 		errLine, _ := strconv.Atoi(strings.Split(err.Error(), ":")[1])
-		startLine, endLine := 0, errLine+3
+		startLine, endLine := -3, +3
 		fmt.Println("Format fail:")
 		line := strings.Split(string(content), "\n")
 		for i := startLine; i <= endLine; i++ {

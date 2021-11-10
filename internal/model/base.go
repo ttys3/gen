@@ -29,6 +29,9 @@ const (
 	EXPRESSION
 	LOGICAL
 	NIL
+	FOR
+	RANGE
+	IGNORE
 )
 
 type SourceCode int

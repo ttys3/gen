@@ -83,6 +83,22 @@ func (w SetClause) String() string {
 	return fmt.Sprintf("helper.SetClause(%s)", w.VarName)
 }
 
+// ForClause set clause
+type ForClause struct {
+	clause
+	Value    []Clause
+	ListName string
+	tmpl     string
+	subKey   string
+	subVal   string
+}
+
+// func ForClause(params map[string]interface{}, list interface{}, tmpl, clauseName, subKey, subValue string) string {
+//func ForClause(params map[string]interface{}, list interface{}, tmpl, clauseName, rangeKey, rangeValue string) string {
+func (f ForClause) String() string {
+	return fmt.Sprintf("helper.ForClause(params,%s,%s,\"%s\",\"%s\",\"%s\")", f.ListName, f.Value[0], f.VarName, f.subKey, f.subVal)
+}
+
 // Slices split sql into chunks
 type Slices struct {
 	slices       []slice
@@ -168,6 +184,10 @@ func (s *Slices) CreateStringSet(name string) {
 	s.tmpl = append(s.tmpl, fmt.Sprintf("%s := make([]string, 0, 100)", name))
 }
 
+func (s *Slices) CreateStringFor(name string) {
+	s.tmpl = append(s.tmpl, fmt.Sprintf("%s := make([]string, 0, 100)", name))
+}
+
 // parse slice and append result to tmpl, return a Clause array
 func (s *Slices) parse() ([]Clause, error) {
 	if s.IsNull() {
@@ -204,6 +224,16 @@ func (s *Slices) parse() ([]Clause, error) {
 			}
 			res = append(res, setClause)
 			s.tmpl = append(s.tmpl, fmt.Sprintf("%s+=helper.SetClause(%s)", name, setClause.VarName))
+		case model.FOR:
+			forClause, err := s.parseFor()
+			_, _ = forClause, err
+			if err != nil {
+				return nil, err
+			}
+			res = append(res, forClause)
+			//s.tmpl = append(s.tmpl, fmt.Sprintf("%s+=helper.SetClause(%s)", name, setClause.VarName))
+			//func ForClause(params map[string]interface{},  list interface{},  tmpl,  clauseName,  rangeKey,  rangeValue  string) string
+			s.tmpl = append(s.tmpl, fmt.Sprintf("%s+=%s", name, forClause.String()))
 		case model.END:
 		default:
 			return nil, fmt.Errorf("unknow clause:%s", slice.Origin)
@@ -269,6 +299,15 @@ func (s *Slices) parseIF() (res IfClause, err error) {
 			elseClause.Cond = fmt.Sprintf("!(%s)", strings.Join(cond, " || "))
 			res.Else = append(res.Else, elseClause)
 			s.appendIfCond(name, elseClause.Cond, elseClause.String())
+		case model.FOR:
+			var forClause ForClause
+			forClause, err = s.parseFor()
+			if err != nil {
+				return
+			}
+			res.Value = append(res.Value, forClause)
+			s.appendIfCond(name, res.Cond, forClause.String())
+
 		case model.END:
 			return
 		default:
@@ -315,6 +354,15 @@ func (s *Slices) parseElSE(name string) (res ElseClause) {
 				return
 			}
 			res.Value = append(res.Value, setClause)
+		case model.FOR:
+			var forClause ForClause
+			var err error
+			forClause, err = s.parseFor()
+			if err != nil {
+				return
+			}
+			res.Value = append(res.Value, forClause)
+			s.appendIfCond(name, res.Cond, forClause.String())
 		default:
 			s.SubIndex()
 			return
@@ -346,6 +394,14 @@ func (s *Slices) parseWhere() (res WhereClause, err error) {
 			}
 			res.Value = append(res.Value, ifClause)
 			s.appendSetValue(name, ifClause.String())
+		case model.FOR:
+			var forClause ForClause
+			forClause, err = s.parseFor()
+			if err != nil {
+				return
+			}
+			res.Value = append(res.Value, forClause)
+			s.appendSetValue(name, forClause.String())
 		case model.END:
 			return
 		default:
@@ -383,6 +439,60 @@ func (s *Slices) parseSet() (res SetClause, err error) {
 			}
 			res.Value = append(res.Value, ifClause)
 			s.appendSetValue(name, ifClause.String())
+		case model.FOR:
+			var forClause ForClause
+			forClause, err = s.parseFor()
+			if err != nil {
+				return
+			}
+			res.Value = append(res.Value, forClause)
+			s.appendSetValue(name, forClause.String())
+		case model.END:
+			return
+		default:
+			err = fmt.Errorf("unknow clause : %s", n.Origin)
+			return
+		}
+	}
+	if s.Current().Type == model.END {
+		return
+	}
+	err = fmt.Errorf("incomplete SQL,set not end")
+	return
+}
+func (s *Slices) parseFor() (res ForClause, err error) {
+	slice := s.Current()
+	name := s.GetName(slice.Type)
+	//s.CreateStringFor(name)
+
+	res.VarName = name
+	res.Type = slice.Type
+	fmt.Println(slice.Value)
+	forList := strings.Split(slice.Origin, " ")
+	res.subKey = forList[1]
+	res.subVal = forList[2]
+	res.ListName = forList[len(forList)-1]
+
+	for s.HasMore() {
+		n := s.Next()
+		switch n.Type {
+		case model.SQL, model.DATA, model.VARIABLE:
+			strClause := s.parseSQL(name)
+			res.Value = append(res.Value, strClause)
+		case model.IF:
+			var ifClause IfClause
+			ifClause, err = s.parseIF()
+			if err != nil {
+				return
+			}
+			res.Value = append(res.Value, ifClause)
+		case model.FOR:
+			var forClause ForClause
+			forClause, err = s.parseFor()
+			if err != nil {
+				return
+			}
+			res.Value = append(res.Value, forClause)
 		case model.END:
 			return
 		default:
@@ -438,7 +548,7 @@ func checkFragment(s string, params []parser.Param) (f fragment, err error) {
 		f.Type = model.INT
 	case "&&", "||":
 		f.Type = model.LOGICAL
-	case ">", "<", ">=", "<=", "==", "!=":
+	case ">", "<", ">=", "<=", "==", "!=", ":=":
 		f.Type = model.EXPRESSION
 	case "end":
 		f.Type = model.END
@@ -452,6 +562,12 @@ func checkFragment(s string, params []parser.Param) (f fragment, err error) {
 		f.Type = model.WHERE
 	case "true", "false":
 		f.Type = model.BOOL
+	case "for":
+		f.Type = model.FOR
+	case "range":
+		f.Type = model.RANGE
+	case "_":
+		f.Type = model.IGNORE
 	case "nil":
 		f.Type = model.NIL
 	default:
@@ -504,7 +620,7 @@ func splitTemplate(tmpl string, params []parser.Param) (fragList []fragment, err
 					break
 				}
 			}
-		case ' ':
+		case ' ', ',':
 			if sqlClause := buf.Dump(); sqlClause != "" {
 				f, err = checkFragment(sqlClause, params)
 				if err != nil {
@@ -512,7 +628,8 @@ func splitTemplate(tmpl string, params []parser.Param) (fragList []fragment, err
 				}
 				fragList = append(fragList, f)
 			}
-		case '>', '<', '=', '!':
+
+		case '>', '<', '=', '!', ':':
 			if sqlClause := buf.Dump(); sqlClause != "" {
 				f, err = checkFragment(sqlClause, params)
 				if err != nil {
@@ -575,6 +692,9 @@ func splitTemplate(tmpl string, params []parser.Param) (fragList []fragment, err
 
 // check validition of clause's value
 func checkTempleFragmentValid(list []fragment) error {
+	if list[0].Type == model.FOR {
+		return nil
+	}
 	for i := 1; i < len(list); i++ {
 		switch list[i].Type {
 		case model.IF, model.ELSE, model.END, model.BOOL, model.LOGICAL, model.WHERE, model.SET:
@@ -655,6 +775,9 @@ func fragmentToSLice(list []fragment) (part slice, err error) {
 		return
 	case "set":
 		part.Type = model.SET
+		return
+	case "for":
+		part.Type = model.FOR
 		return
 	case "end":
 		part.Type = model.END
